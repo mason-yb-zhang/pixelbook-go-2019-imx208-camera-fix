@@ -1,27 +1,33 @@
-From: Assistant <assistant@local>
-Date: Fri, 5 Jun 2026 08:34:00 +0800
-Subject: [PATCH] ipa: libipa: Add IMX208 camera sensor helper and properties
+From: mason <mason@example.com>
+Date: Fri, 14 Nov 2026 01:30:00 +0800
+Subject: [PATCH] ipa: libipa: Add IMX208 camera sensor helper and properties (libcamera 0.7.2)
 
-The Sony IMX208 is used in several Intel IPU3-based devices (e.g. some
-Surface tablets and 2-in-1s). Without this helper, the IPU3 IPA fails
-to initialize with:
+The Sony IMX208 is used in Intel IPU3-based devices (e.g. the Pixelbook
+Go 2019). Without the sensor helper, the IPU3 IPA fails to initialize
+with:
 
   ERROR IPAIPU3 ipu3.cpp:306 Failed to create camera sensor helper for imx208
 
-Add the CameraSensorHelper and sensor properties entries to allow
-libcamera to recognize and operate the IMX208.
+Add the CameraSensorHelper and the static sensor-properties entry so
+libcamera can recognize and operate the IMX208. The properties entry is
+also required for capture: the IPU3 pipeline calls setTestPatternMode()
+during start(), which fails if the static testPatternModes map is empty.
 
-Signed-off-by: Assistant <assistant@local>
+This is the libcamera 0.7.2 version of the patch (the 0.7.1 version used
+the same logic with slightly different context lines).
+
+Signed-off-by: mason <mason@example.com>
 ---
- src/ipa/libipa/camera_sensor_helper.cpp       |  9 +++++++++
- src/libcamera/sensor/camera_sensor_properties.cpp | 13 +++++++++++++
- 2 files changed, 22 insertions(+)
+ src/ipa/libipa/camera_sensor_helper.cpp               | 11 +++++++++++
+ src/libcamera/sensor/camera_sensor_properties.cpp     | 16 ++++++++++++++++
+ 2 files changed, 27 insertions(+)
 
 diff --git a/src/ipa/libipa/camera_sensor_helper.cpp b/src/ipa/libipa/camera_sensor_helper.cpp
-index xxxxxxx..xxxxxxx 100644
+index 9457d62..05108a0 100644
 --- a/src/ipa/libipa/camera_sensor_helper.cpp
 +++ b/src/ipa/libipa/camera_sensor_helper.cpp
-@@ -556,6 +556,15 @@ class CameraSensorHelperImx219 : public CameraSensorHelper
+@@ -554,6 +554,17 @@ class CameraSensorHelperImx219 : public CameraSensorHelper
+ };
  REGISTER_CAMERA_SENSOR_HELPER("imx219", CameraSensorHelperImx219)
  
 +class CameraSensorHelperImx208 : public CameraSensorHelper
@@ -39,26 +45,29 @@ index xxxxxxx..xxxxxxx 100644
  {
  public:
 diff --git a/src/libcamera/sensor/camera_sensor_properties.cpp b/src/libcamera/sensor/camera_sensor_properties.cpp
-index xxxxxxx..xxxxxxx 100644
+index 2804315..d2b7b9e 100644
 --- a/src/libcamera/sensor/camera_sensor_properties.cpp
 +++ b/src/libcamera/sensor/camera_sensor_properties.cpp
-@@ -211,6 +211,19 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
- 			} },
- 		{ "imx208", {
- 				.unitCellSize = { 1120, 1120 },
- 				.testPatternModes = {
- 					{ controls::draft::TestPatternModeOff, 0 },
- 					{ controls::draft::TestPatternModeSolidColor, 1 },
- 					{ controls::draft::TestPatternModeColorBars, 2 },
- 					{ controls::draft::TestPatternModeColorBarsFadeToGray, 3 },
- 					{ controls::draft::TestPatternModePn9, 4 },
- 				},
- 				.sensorDelays = {
- 					.exposureDelay = 2,
- 					.gainDelay = 2,
- 					.vblankDelay = 2,
- 					.hblankDelay = 2
- 				},
- 			} },
+@@ -210,6 +210,22 @@ const CameraSensorProperties *CameraSensorProperties::get(const std::string &sen
+ 				.hblankDelay = 2
+ 			},
+ 		} },
++		{ "imx208", {
++			.unitCellSize = { 1120, 1120 },
++			.testPatternModes = {
++				{ controls::draft::TestPatternModeOff, 0 },
++				{ controls::draft::TestPatternModeSolidColor, 1 },
++				{ controls::draft::TestPatternModeColorBars, 2 },
++				{ controls::draft::TestPatternModeColorBarsFadeToGray, 3 },
++				{ controls::draft::TestPatternModePn9, 4 },
++			},
++			.sensorDelays = {
++				.exposureDelay = 2,
++				.gainDelay = 2,
++				.vblankDelay = 2,
++				.hblankDelay = 2
++			},
++		} },
  		{ "imx258", {
- 				.unitCellSize = { 1120, 1120 },
+ 			.unitCellSize = { 1120, 1120 },
+ 			.testPatternModes = {

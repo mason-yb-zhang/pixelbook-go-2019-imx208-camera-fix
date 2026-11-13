@@ -1,32 +1,29 @@
-From: Assistant <assistant@local>
-Date: Fri, 5 Jun 2026 08:34:00 +0800
-Subject: [PATCH] media: i2c: imx208: Add get_selection pad operation
+From: mason <mason@example.com>
+Date: Fri, 14 Nov 2026 01:30:00 +0800
+Subject: [PATCH] media: i2c: imx208: Add get_selection pad operation (kernel 7.3.x)
 
-libcamera (and other modern camera stacks) require the sensor driver
-to implement V4L2_SUBDEV_PAD_OPS get_selection in order to query the
-crop rectangle, crop bounds and native sensor size.
+libcamera requires the sensor driver to implement the V4L2 subdev
+get_selection pad op to query the crop rectangle, crop bounds and native
+sensor size. Without it, libcamera prints warnings such as "Unable to get
+rectangle 0 on pad 0/0" and the IPU3 pipeline cannot obtain the sensor
+crop information.
 
-Without this operation, libcamera falls back to default values and
-prints warnings such as:
+This is the kernel 7.3.x version of the patch. The driver was refactored
+between 7.0 and 7.3:
 
-  ERROR V4L2 v4l2_subdevice.cpp:1192 'imx208 2-0010':
-         Unable to get rectangle 0 on pad 0/0
-  WARN CameraSensor camera_sensor_legacy.cpp:427 'imx208 2-0010':
-         The sensor kernel driver needs to be fixed
+  - imx208_get_fmt  -> imx208_get_pad_format
+  - imx208->mode->format  ->  imx208->cur_mode (width/height directly)
 
-Implement get_selection to return CROP, CROP_BOUNDS and NATIVE_SIZE
-based on the currently selected mode.
-
-Signed-off-by: Assistant <assistant@local>
+Signed-off-by: mason <mason@example.com>
 ---
- drivers/media/i2c/imx208.c | 32 ++++++++++++++++++++++++++++++++
- 1 file changed, 32 insertions(+)
+ drivers/media/i2c/imx208.c | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
 
 diff --git a/drivers/media/i2c/imx208.c b/drivers/media/i2c/imx208.c
-index xxxxxxx..xxxxxxx 100644
+index d5350bb..67c3756 100644
 --- a/drivers/media/i2c/imx208.c
 +++ b/drivers/media/i2c/imx208.c
-@@ -450,6 +450,36 @@ static int imx208_enum_frame_size(struct v4l2_subdev *sd,
+@@ -536,6 +536,33 @@ static int imx208_enum_frame_size(struct v4l2_subdev *sd,
  	return 0;
  }
  
@@ -35,17 +32,15 @@ index xxxxxxx..xxxxxxx 100644
 +				struct v4l2_subdev_selection *sel)
 +{
 +	struct imx208 *imx208 = to_imx208(sd);
-+	struct v4l2_mbus_framefmt *fmt;
 +
 +	switch (sel->target) {
 +	case V4L2_SEL_TGT_CROP:
 +	case V4L2_SEL_TGT_CROP_DEFAULT:
 +	case V4L2_SEL_TGT_CROP_BOUNDS:
-+		fmt = &imx208->mode->format;
 +		sel->r.left = 0;
 +		sel->r.top = 0;
-+		sel->r.width = fmt->width;
-+		sel->r.height = fmt->height;
++		sel->r.width = imx208->cur_mode->width;
++		sel->r.height = imx208->cur_mode->height;
 +		return 0;
 +	case V4L2_SEL_TGT_NATIVE_SIZE:
 +		/* Native pixel array size: 1936 x 1096 */
@@ -59,14 +54,14 @@ index xxxxxxx..xxxxxxx 100644
 +	}
 +}
 +
- static int imx208_get_fmt(struct v4l2_subdev *sd,
- 			  struct v4l2_subdev_state *sd_state,
- 			  struct v4l2_subdev_format *fmt)
-@@ -580,6 +610,7 @@ static const struct v4l2_subdev_pad_ops imx208_pad_ops = {
- 	.enum_mbus_code = imx208_enum_mbus_code,
+ static void imx208_mode_to_pad_format(struct imx208 *imx208,
+ 				      const struct imx208_mode *mode,
+ 				      struct v4l2_subdev_format *fmt)
+@@ -754,6 +781,7 @@ static const struct v4l2_subdev_pad_ops imx208_pad_ops = {
+ 	.get_fmt = imx208_get_pad_format,
+ 	.set_fmt = imx208_set_pad_format,
  	.enum_frame_size = imx208_enum_frame_size,
- 	.get_fmt = imx208_get_fmt,
 +	.get_selection = imx208_get_selection,
- 	.set_fmt = imx208_set_fmt,
  };
  
+ static const struct v4l2_subdev_ops imx208_subdev_ops = {

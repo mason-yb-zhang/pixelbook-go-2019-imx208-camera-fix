@@ -1,131 +1,92 @@
-# IMX208 摄像头修复指南
+# IMX208 摄像头修复指南（v2.0.0）
 
 ## 问题概述
 
 你的设备使用 **Intel IPU3 + Sony IMX208** 方案，摄像头无法被系统识别。
 
-根因有两个：
-1. **libcamera 缺少 IMX208 的 sensor helper** → 导致 IPU3 IPA 初始化失败
-2. **内核 imx208 驱动缺少 `get_selection` pad op** → 导致 libcamera 无法获取 sensor crop 信息
+根因有三个：
+1. **libcamera 缺少 IMX208 的 sensor helper** → IPU3 IPA 初始化失败
+2. **libcamera 缺少 IMX208 的传感器属性** → 属性里的 `testPatternModes` 缺失会让 IPU3 管线在 `start()` 阶段 `setTestPatternMode()` 失败，**导致无法出图**
+3. **内核 imx208 驱动缺少 `get_selection` pad op** → libcamera 无法获取 sensor crop 信息
 
-## 已提供的 Patch
+## 版本对应
 
-| 文件 | 说明 |
-|------|------|
-| `libcamera-add-imx208-helper.patch` | 为 libcamera 添加 IMX208 支持 |
-| `kernel-imx208-add-get_selection.patch` | 为内核驱动添加 V4L2 selection 支持 |
+| 版本 | 内核 | libcamera |
+|------|------|-----------|
+| v2.0.0（本文档） | 7.3.x | 0.7.2 |
+| v1.0.0 | 7.0.10 | 0.7.1 |
+
+**v2.0.0 相对 v1.0.0 的内核接口变化**（补丁适配点）：
+- `imx208_get_fmt` → `imx208_get_pad_format`
+- `imx208_set_fmt` → `imx208_set_pad_format`
+- `imx208->mode->format` → `imx208->cur_mode`（直接 `->width` / `->height`）
 
 ---
 
-## 第一部分：编译安装 libcamera
+## 第一部分：编译安装 libcamera（0.7.2）
 
 ### 1. 安装编译依赖
 
 ```bash
-sudo dnf install -y meson ninja-build gcc-c++ git \
-    libgnutls-devel openssl-devel libtiff-devel \
-    libyaml-devel python3-yaml python3-ply \
-    libglib2.0-devel gstreamer1-plugins-base-devel \
-    qt5-qtbase-devel libepoxy-devel boost-devel \
-    python3-pybind11 libevent-devel
+sudo dnf install -y meson ninja-build gcc-c++ gnutls-devel openssl-devel \
+    libtiff-devel libyaml-devel python3-yaml python3-jinja2 python3-ply \
+    glib2-devel gstreamer1-plugins-base-devel \
+    qt5-qtbase-devel libepoxy-devel boost-devel python3-pybind11 \
+    libevent-devel git
 ```
 
-### 2. 获取源码
-
-系统上已经下载了 libcamera-0.7.1 的源码包。如果没有，执行：
+### 2. 获取 0.7.2 源码
 
 ```bash
 cd /tmp
-dnf download --source libcamera
-rpm2cpio libcamera-0.7.1-1.fc44.src.rpm | cpio -idmv
-tar -xjf libcamera-v0.7.1.tar.bz2
+dnf download --source libcamera      # 若 updates-source 源 404，改从 Koji 下载
+# Koji 备选：
+# curl -L -o libcamera.src.rpm "https://kojipkgs.fedoraproject.org/packages/libcamera/0.7.2/2.fc44/src/libcamera-0.7.2-2.fc44.src.rpm"
+rpm2cpio libcamera-0.7.2-*.src.rpm | cpio -idmv
+tar -xjf libcamera-v0.7.2.tar.bz2
 ```
 
 ### 3. 应用 Patch
 
 ```bash
-cd /tmp/libcamera-v0.7.1
-patch -p1 < ~/桌面/libcamera-add-imx208-helper.patch
+cd /tmp/libcamera-v0.7.2
+patch -p1 < ~/imx208-camera-fix/libcamera-add-imx208-helper.patch
 ```
 
-如果 patch 命令提示找不到文件（因为 patch 是基于行号估算的），可以手动编辑：
-
-**编辑 `src/ipa/libipa/camera_sensor_helper.cpp`**
-
-在 `REGISTER_CAMERA_SENSOR_HELPER("imx219", CameraSensorHelperImx219)` 之后添加：
-
-```cpp
-class CameraSensorHelperImx208 : public CameraSensorHelper
-{
-public:
-	CameraSensorHelperImx208()
-	{
-		/* IMX208 uses the same analogue gain model as IMX219 */
-		gain_ = AnalogueGainLinear{ 0, 256, -1, 256 };
-	}
-};
-REGISTER_CAMERA_SENSOR_HELPER("imx208", CameraSensorHelperImx208)
-```
-
-**编辑 `src/libcamera/sensor/camera_sensor_properties.cpp`**
-
-在 `"imx208"` 条目处（如果不存在则在 `"imx258"` 之前）添加：
-
-```cpp
-		{ "imx208", {
-				.unitCellSize = { 1120, 1120 },
-				.testPatternModes = {
-					{ controls::draft::TestPatternModeOff, 0 },
-					{ controls::draft::TestPatternModeSolidColor, 1 },
-					{ controls::draft::TestPatternModeColorBars, 2 },
-					{ controls::draft::TestPatternModeColorBarsFadeToGray, 3 },
-					{ controls::draft::TestPatternModePn9, 4 },
-				},
-				.sensorDelays = {
-					.exposureDelay = 2,
-					.gainDelay = 2,
-					.vblankDelay = 2,
-					.hblankDelay = 2
-				},
-			} },
-```
+若 patch 提示行号不对，按补丁内容手动编辑两个文件：
+- `src/ipa/libipa/camera_sensor_helper.cpp` — 在 imx219 后加 `CameraSensorHelperImx208` 类并注册
+- `src/libcamera/sensor/camera_sensor_properties.cpp` — 在 imx258 前加 `{ "imx208", {...} }` 条目（**含 `testPatternModes`，缺了会无法出图**）
 
 ### 4. 编译并安装
 
 ```bash
-cd /tmp/libcamera-v0.7.1
-meson setup build --buildtype=release \
-    -Dgstreamer=enabled \
-    -Dpipelines=auto \
-    -Dipas=auto \
-    -Dv4l2=true \
-    -Dcam=enabled \
-    -Dqcam=enabled \
-    -Ddocumentation=disabled \
-    -Dtests=disabled
+cd /tmp/libcamera-v0.7.2
+# 禁用 ccache，避免 mtime 未更新导致返回缓存旧对象
+CCACHE_DISABLE=1 CXXFLAGS="-Wno-error=array-bounds -Wno-error" \
+    meson setup build --buildtype=release \
+    -Dgstreamer=enabled -Dpipelines=ipu3 -Dipas=ipu3 \
+    -Dv4l2=enabled -Dcam=enabled -Dqcam=disabled \
+    -Ddocumentation=disabled -Dlc-compliance=disabled \
+    -Dpycamera=disabled -Dtracing=disabled -Dtest=false
 
-ninja -C build
+CCACHE_DISABLE=1 ninja -C build
 sudo ninja -C build install
 sudo ldconfig
 ```
 
-### 5. 重启 PipeWire
+### 5. 覆盖系统库
 
 ```bash
-systemctl --user restart pipewire wireplumber
+bash ~/imx208-camera-fix/override-libcamera.sh
 ```
 
-然后检查摄像头是否出现：
-
-```bash
-pw-cli ls Node | grep -i camera
-```
+**关键坑**：备份文件必须移出 `/lib64`，否则 `ldconfig` 会把 `.bak` 当更高版本、把
+`libcamera.so.0.7` 符号链接指回原版库（症状：补丁编译进去了，运行时仍找不到 imx208）。
+`override-libcamera.sh` 已把备份放到 `~/libcamera-backups/` 并显式修正符号链接。
 
 ---
 
-## 第二部分：编译内核模块（可选但推荐）
-
-如果你仍然看到内核驱动相关的 warning（如 `Unable to get rectangle`），需要修补内核驱动。
+## 第二部分：编译内核模块（get_selection）
 
 ### 1. 安装内核开发包
 
@@ -136,17 +97,23 @@ sudo dnf install -y kernel-devel-$(uname -r) kernel-headers-$(uname -r)
 ### 2. 获取 imx208.c 源码
 
 ```bash
-cd /tmp
-# 从当前运行内核的源码树复制
-cp /usr/src/kernels/$(uname -r)/drivers/media/i2c/imx208.c ./imx208.c 2>/dev/null || \
-curl -L -o imx208.c "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/drivers/media/i2c/imx208.c?h=v$(uname -r | cut -d. -f1-2)"
+mkdir -p /tmp/imx208 && cd /tmp/imx208
+curl -L -o imx208.c \
+  "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git/plain/drivers/media/i2c/imx208.c?h=v7.3"
 ```
 
-### 3. 编写补丁或手动修改
+> 内核 7.3.x 的 imx208.c 已原生实现 `V4L2_CID_TEST_PATTERN` 控制（0x0600 寄存器），
+> 无需额外补丁；只需补 `get_selection`。
 
-由于内核版本差异，自动 patch 可能不生效。建议手动在 `imx208.c` 中：
+### 3. 应用 Patch
 
-**A. 在文件中找到 `imx208_enum_frame_size` 函数，在其后添加：**
+```bash
+patch -p1 < ~/imx208-camera-fix/kernel-imx208-add-get_selection.patch
+```
+
+若 patch 不适用，手动改两处：
+
+**A. 在 `imx208_enum_frame_size` 函数之后添加 `imx208_get_selection`：**
 
 ```c
 static int imx208_get_selection(struct v4l2_subdev *sd,
@@ -161,11 +128,11 @@ static int imx208_get_selection(struct v4l2_subdev *sd,
 	case V4L2_SEL_TGT_CROP_BOUNDS:
 		sel->r.left = 0;
 		sel->r.top = 0;
-		sel->r.width = imx208->mode->width;
-		sel->r.height = imx208->mode->height;
+		sel->r.width = imx208->cur_mode->width;
+		sel->r.height = imx208->cur_mode->height;
 		return 0;
 	case V4L2_SEL_TGT_NATIVE_SIZE:
-		/* Native pixel array size */
+		/* Native pixel array size: 1936 x 1096 */
 		sel->r.left = 0;
 		sel->r.top = 0;
 		sel->r.width = 1936;
@@ -177,110 +144,86 @@ static int imx208_get_selection(struct v4l2_subdev *sd,
 }
 ```
 
-**B. 找到 `imx208_pad_ops` 结构体，在 `.get_fmt` 行后添加：**
+**B. 在 `imx208_pad_ops` 结构体中加一行：**
 
 ```c
 static const struct v4l2_subdev_pad_ops imx208_pad_ops = {
 	.enum_mbus_code = imx208_enum_mbus_code,
+	.get_fmt = imx208_get_pad_format,
+	.set_fmt = imx208_set_pad_format,
 	.enum_frame_size = imx208_enum_frame_size,
-	.get_fmt = imx208_get_fmt,
-	.get_selection = imx208_get_selection,  /* <-- 添加这一行 */
-	.set_fmt = imx208_set_fmt,
+	.get_selection = imx208_get_selection,   /* <-- 添加 */
 };
 ```
 
 ### 4. 编译模块
 
-创建一个简单的 Makefile：
-
 ```bash
 cat > /tmp/imx208/Makefile << 'EOF'
 KVER := $(shell uname -r)
 KDIR := /lib/modules/$(KVER)/build
-
 obj-m += imx208.o
-
 all:
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
-
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 EOF
-```
 
-然后编译：
-
-```bash
-cd /tmp/imx208
-make
+cd /tmp/imx208 && make
 ```
 
 ### 5. 安装模块
 
 ```bash
-sudo cp imx208.ko /lib/modules/$(uname -r)/kernel/drivers/media/i2c/
-sudo xz -f /lib/modules/$(uname -r)/kernel/drivers/media/i2c/imx208.ko
+# 关键：必须用 --check=crc32，xz 默认 CRC64 会被内核拒绝
+sudo xz --check=crc32 -f imx208.ko
+sudo install -m 644 imx208.ko.xz \
+    /lib/modules/$(uname -r)/kernel/drivers/media/i2c/imx208.ko.xz
 sudo depmod -a
 ```
 
-由于 Fedora 使用 Secure Boot 内核签名，新编译的未签名模块可能无法加载。你有两个选择：
+> 内核会报 `decompression failed with status 6` 若用默认 xz 压缩（CRC64）。
 
-**选项 A：禁用 Secure Boot（最简单）**
-进入 BIOS/UEFI 设置，关闭 Secure Boot。
-
-**选项 B：给模块签名**
-```bash
-sudo /usr/src/kernels/$(uname -r)/scripts/sign-file sha256 \
-    /var/lib/dkms/mok.key /var/lib/dkms/mok.pub \
-    /lib/modules/$(uname -r)/kernel/drivers/media/i2c/imx208.ko.xz
-```
-
-如果这是你第一次给模块签名，需要先创建 MOK 密钥并注册到 UEFI：
-```bash
-sudo mokutil --import /var/lib/dkms/mok.pub
-# 设置密码，重启后在 MOK 管理界面中 enroll 该密钥
-```
-
-### 6. 加载新模块
+### 6. 重新加载模块
 
 ```bash
+# 解绑 i2c 设备（设备名可能是 i2c-INT3478:00 或 2-0010）
+echo i2c-INT3478:00 | sudo tee /sys/bus/i2c/drivers/imx208/unbind
 sudo modprobe -r imx208
 sudo modprobe imx208
 ```
 
 ---
 
-## 第三部分：验证修复
+## 第三部分：验证
 
 ```bash
-# 检查 PipeWire 是否识别了摄像头
+# 摄像头识别
 pw-cli ls Node | grep -i camera
+cam --list                       # 应列出 'imx208'，且无 "No static properties" 警告
 
-# 检查 libcamera 是否能识别传感器
-libcamera-hello --list-cameras 2>/dev/null || cam --list 2>/dev/null
-
-# 或者用 v4l2-ctl 测试（安装 v4l-utils）
-v4l2-ctl --list-devices
+# 实际抓帧
+cam -c 1 --capture=1 --file=/tmp/frame
 ```
 
+`cam --list` 中若出现 `No static properties available for 'imx208'`，说明 libcamera
+属性补丁没生效（通常是 ldconfig 符号链接指错或 ccache 缓存，见"已知坑"）。
+
 ---
+
+## 已知坑汇总
+
+1. **xz 压缩**：`.ko` 必须 `xz --check=crc32`，否则内核报 `decompression failed status 6`。
+2. **ldconfig 符号链接**：`.bak` 备份不能留在 `/lib64`，否则 `libcamera.so.0.7` 会被指回原版。
+3. **ccache 缓存**：源码 mtime 未更新时 ccache 返回旧对象，编译前 `export CCACHE_DISABLE=1`。
+4. **Secure Boot**：本机已关闭 Secure Boot。若开启，自编译内核模块需用 MOK 签名（见 v1.0.0 指南）。
 
 ## 注意事项
 
-1. **增益模型是推断的**：IMX208 的 `AnalogueGainLinear{ 0, 256, -1, 256 }` 是基于它与 IMX219 使用相同寄存器地址（0x0204）推断的。如果实际画面亮度异常（过曝/欠曝），可能需要根据数据手册调整参数。
+- IMX208 增益模型 `AnalogueGainLinear{ 0, 256, -1, 256 }` 基于与 IMX219 相似性推断；画面亮度异常时需按数据手册调整。
+- 修复后摄像头仍可能报"Camera location / Rotation not available"等无害警告（驱动未实现对应控制）。
 
-2. **内核模块签名**：Fedora 默认启用 Secure Boot，自己编译的模块需要签名或禁用 Secure Boot。
-
-3. **保留原始文件**：建议先备份：
-   - `/usr/lib64/libcamera/ipa/ipa_ipu3.so`
-   - `/lib/modules/$(uname -r)/kernel/drivers/media/i2c/imx208.ko.xz`
-
-4. **如果只想快速恢复**：直接外接一个 USB 摄像头即可绕过此问题。
-
----
-
-## 参考链接
+## 参考
 
 - [libcamera 源码](https://git.libcamera.org/libcamera/libcamera.git/)
 - [Linux 内核 imx208.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/media/i2c/imx208.c)
-- [libcamera IPU3 Sensor Helper 机制](https://libcamera.org/api-html/classlibcamera_1_1ipa_1_1CameraSensorHelper.html)

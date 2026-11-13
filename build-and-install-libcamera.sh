@@ -2,10 +2,13 @@
 set -e
 
 echo "=========================================="
-echo "libcamera IMX208 修复编译脚本"
+echo "libcamera IMX208 修复编译脚本 (0.7.2)"
 echo "=========================================="
 echo ""
 echo "注意：编译过程中会提示输入 sudo 密码"
+echo ""
+echo "本脚本针对 libcamera 0.7.2（Fedora 44 + 内核 7.3.x）。"
+echo "如果系统 libcamera 已升级到其他版本，请同步修改 SRC_DIR。"
 echo ""
 
 # 1. 安装编译依赖
@@ -25,10 +28,14 @@ sudo dnf install -y --skip-unavailable meson ninja-build gcc-c++ gnutls-devel op
 }
 
 # 2. 确认源码目录
-SRC_DIR="/tmp/libcamera-v0.7.1"
+SRC_DIR="/tmp/libcamera-v0.7.2"
 if [ ! -f "$SRC_DIR/meson.build" ]; then
     echo "错误：找不到 libcamera 源码目录 $SRC_DIR"
-    echo "请先解压源码包到 /tmp/libcamera-v0.7.1/"
+    echo "请先解压源码包到 /tmp/libcamera-v0.7.2/"
+    echo "获取源码："
+    echo "  dnf download --source libcamera   # 或从 Koji 下载 src.rpm"
+    echo "  rpm2cpio libcamera-0.7.2-*.src.rpm | cpio -idmv"
+    echo "  tar -xjf libcamera-v0.7.2.tar.bz2"
     exit 1
 fi
 
@@ -40,6 +47,9 @@ if [ -d build ]; then
     echo "删除旧的编译目录..."
     rm -rf build
 fi
+
+# 禁用 ccache，避免因文件 mtime 未更新导致返回缓存旧对象（曾导致补丁失效）
+export CCACHE_DISABLE=1
 
 CXXFLAGS="-Wno-error=array-bounds -Wno-error" meson setup build --buildtype=release \
     -Dgstreamer=enabled \
